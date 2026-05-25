@@ -5,7 +5,8 @@ permissions:
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/5 * * * *"   # NORMAL scan
+    - cron: "0 */4 * * *"   # DEEP scan
   workflow_dispatch:
 
 jobs:
@@ -24,6 +25,7 @@ jobs:
       - name: Run bot
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          SCAN_MODE: ${{ github.event.schedule }}
         run: python bot.py
 
       - name: Save state
