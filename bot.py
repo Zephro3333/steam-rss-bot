@@ -3,6 +3,7 @@ import requests
 import json
 import os
 import time
+import re
 from datetime import datetime
 
 WEBHOOK = os.getenv("DISCORD_WEBHOOK")
@@ -18,8 +19,10 @@ SEEN_FILE = os.path.join(DATA_DIR, "seen.json")
 HEARTBEAT_FILE = os.path.join(DATA_DIR, "heartbeat.json")
 FULL_CHECK_FILE = os.path.join(DATA_DIR, "last_full_check.json")
 
-FULL_CHECK_INTERVAL = 60 * 60 * 4  # 4 horas
+FULL_CHECK_INTERVAL = 60 * 60 * 4  # 4h
 
+
+# -------------------- INIT --------------------
 
 def ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -46,76 +49,88 @@ def save_seen(seen):
     save_json(SEEN_FILE, seen)
 
 
-def send_discord_message(content=None, embeds=None):
-    payload = {}
+# -------------------- DISCORD --------------------
 
-    if content:
-        payload["content"] = content
-
-    if embeds:
-        payload["embeds"] = embeds
-
+def send_discord(payload):
     requests.post(WEBHOOK, json=payload)
 
 
-def send_feed_item(feed_name, title, link):
-    embeds = [
-        {
-            "title": title,
-            "url": link,
-            "description": f"Novo item em {feed_name}",
-            "color": 3447003,
-            "footer": {"text": "Steam RSS Bot"},
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    ]
+def send_embed(title, url, feed_name, image_url=None):
+    embed = {
+        "title": title,
+        "url": url,
+        "description": f"Novo item em {feed_name}",
+        "color": 3447003,
+        "footer": {"text": "Steam RSS Bot"},
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
-    send_discord_message(embeds=embeds)
+    if image_url:
+        embed["thumbnail"] = {"url": image_url}
 
+    send_discord({"embeds": [embed]})
+
+
+# -------------------- IMAGE EXTRACTION --------------------
+
+def extract_image(entry):
+    if "media_content" in entry and entry.media_content:
+        return entry.media_content[0].get("url")
+
+    if "media_thumbnail" in entry and entry.media_thumbnail:
+        return entry.media_thumbnail[0].get("url")
+
+    if "summary" in entry:
+        match = re.search(r'<img.*src="(.*?)"', entry.summary)
+        if match:
+            return match.group(1)
+
+    return None
+
+
+# -------------------- HEARTBEAT --------------------
 
 def should_send_heartbeat():
     today = datetime.utcnow().strftime("%Y-%m-%d")
-
     data = load_json(HEARTBEAT_FILE, {})
-
     return data.get("last_heartbeat") != today
 
 
 def save_heartbeat():
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-
     save_json(HEARTBEAT_FILE, {
-        "last_heartbeat": today
+        "last_heartbeat": datetime.utcnow().strftime("%Y-%m-%d")
     })
 
 
 def send_heartbeat():
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    send_discord({
+        "content": f"💓 Steam RSS Bot online — {now}"
+    })
 
-    send_discord_message(
-        content=f"💓 Steam RSS Bot alive — {now}"
-    )
 
+# -------------------- FULL CHECK --------------------
 
 def should_run_full_check():
     data = load_json(FULL_CHECK_FILE, {"last_check": 0})
-
-    return time.time() - data.get("last_check", 0) > FULL_CHECK_INTERVAL
+    return time.time() - data["last_check"] > FULL_CHECK_INTERVAL
 
 
 def save_full_check():
     save_json(FULL_CHECK_FILE, {"last_check": time.time()})
 
 
+# -------------------- FEED CHECK --------------------
+
 def check_feed(feed_name, url, seen):
     print(f"Checking {feed_name}")
-
-    found_new = False
 
     feed = feedparser.parse(url)
 
     if feed_name not in seen:
         seen[feed_name] = []
+
+    found = False
 
     for entry in feed.entries:
         uid = entry.get("id", entry.link)
@@ -123,34 +138,38 @@ def check_feed(feed_name, url, seen):
         if uid in seen[feed_name]:
             continue
 
-        send_feed_item(feed_name, entry.title, entry.link)
+        image = extract_image(entry)
+
+        send_embed(entry.title, entry.link, feed_name, image)
 
         seen[feed_name].append(uid)
         seen[feed_name] = seen[feed_name][-100:]
 
-        found_new = True
+        found = True
 
-    return found_new
+    return found
 
+
+# -------------------- MAIN --------------------
 
 def main():
     ensure_data_dir()
 
     seen = load_seen()
 
-    found_anything = False
+    found_any = False
 
     if should_run_full_check():
         print("Running 4h full revision...")
         save_full_check()
 
-    for feed_name, url in FEEDS.items():
-        if check_feed(feed_name, url, seen):
-            found_anything = True
+    for name, url in FEEDS.items():
+        if check_feed(name, url, seen):
+            found_any = True
 
     save_seen(seen)
 
-    if not found_anything and should_send_heartbeat():
+    if not found_any and should_send_heartbeat():
         send_heartbeat()
         save_heartbeat()
 
