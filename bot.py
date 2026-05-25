@@ -4,7 +4,7 @@ import json
 import os
 import time
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 
@@ -19,10 +19,14 @@ SEEN_FILE = os.path.join(DATA_DIR, "seen.json")
 HEARTBEAT_FILE = os.path.join(DATA_DIR, "heartbeat.json")
 FULL_CHECK_FILE = os.path.join(DATA_DIR, "last_full_check.json")
 
-FULL_CHECK_INTERVAL = 60 * 60 * 4  # 4h
+FULL_CHECK_INTERVAL = 60 * 60 * 4  # 4 horas
+
+# 🧪 TEST MODE (última semana)
+TEST_MODE = True
+TEST_DAYS = 7
 
 
-# -------------------- INIT --------------------
+# ---------------- INIT ----------------
 
 def ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -31,7 +35,6 @@ def ensure_data_dir():
 def load_json(path, default):
     if not os.path.exists(path):
         return default
-
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -49,7 +52,7 @@ def save_seen(seen):
     save_json(SEEN_FILE, seen)
 
 
-# -------------------- DISCORD --------------------
+# ---------------- DISCORD ----------------
 
 def send_discord(payload):
     requests.post(WEBHOOK, json=payload)
@@ -71,7 +74,7 @@ def send_embed(title, url, feed_name, image_url=None):
     send_discord({"embeds": [embed]})
 
 
-# -------------------- IMAGE EXTRACTION --------------------
+# ---------------- IMAGES ----------------
 
 def extract_image(entry):
     if "media_content" in entry and entry.media_content:
@@ -88,7 +91,17 @@ def extract_image(entry):
     return None
 
 
-# -------------------- HEARTBEAT --------------------
+# ---------------- TEST FILTER ----------------
+
+def is_recent(entry):
+    if not hasattr(entry, "published_parsed") or not entry.published_parsed:
+        return True
+
+    published = datetime(*entry.published_parsed[:6])
+    return published >= datetime.utcnow() - timedelta(days=TEST_DAYS)
+
+
+# ---------------- HEARTBEAT ----------------
 
 def should_send_heartbeat():
     today = datetime.utcnow().strftime("%Y-%m-%d")
@@ -104,12 +117,13 @@ def save_heartbeat():
 
 def send_heartbeat():
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
     send_discord({
-        "content": f"💓 Steam RSS Bot online — {now}"
+        "content": f"💓 Steam RSS Bot alive — {now}"
     })
 
 
-# -------------------- FULL CHECK --------------------
+# ---------------- FULL CHECK ----------------
 
 def should_run_full_check():
     data = load_json(FULL_CHECK_FILE, {"last_check": 0})
@@ -120,7 +134,7 @@ def save_full_check():
     save_json(FULL_CHECK_FILE, {"last_check": time.time()})
 
 
-# -------------------- FEED CHECK --------------------
+# ---------------- FEED CHECK ----------------
 
 def check_feed(feed_name, url, seen):
     print(f"Checking {feed_name}")
@@ -133,24 +147,31 @@ def check_feed(feed_name, url, seen):
     found = False
 
     for entry in feed.entries:
+
+        # 🧪 TEST MODE: últimos 7 dias
+        if TEST_MODE and not is_recent(entry):
+            continue
+
         uid = entry.get("id", entry.link)
 
-        if uid in seen[feed_name]:
+        # em modo normal evita duplicados
+        if not TEST_MODE and uid in seen[feed_name]:
             continue
 
         image = extract_image(entry)
 
         send_embed(entry.title, entry.link, feed_name, image)
 
-        seen[feed_name].append(uid)
-        seen[feed_name] = seen[feed_name][-100:]
+        if not TEST_MODE:
+            seen[feed_name].append(uid)
+            seen[feed_name] = seen[feed_name][-100:]
 
         found = True
 
     return found
 
 
-# -------------------- MAIN --------------------
+# ---------------- MAIN ----------------
 
 def main():
     ensure_data_dir()
@@ -167,7 +188,8 @@ def main():
         if check_feed(name, url, seen):
             found_any = True
 
-    save_seen(seen)
+    if not TEST_MODE:
+        save_seen(seen)
 
     if not found_any and should_send_heartbeat():
         send_heartbeat()
