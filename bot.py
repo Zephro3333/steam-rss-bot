@@ -9,8 +9,7 @@ WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 
 FEEDS = {
     "🆕 New Releases": "https://store.steampowered.com/feeds/newreleases.xml",
-    "🔥 Daily Deals": "https://store.steampowered.com/feeds/daily_deals.xml",
-    "📰 Steam News": "https://store.steampowered.com/feeds/news.xml"
+    "🔥 Daily Deals": "https://store.steampowered.com/feeds/daily_deals.xml"
 }
 
 DATA_DIR = "data"
@@ -56,10 +55,7 @@ def send_discord_message(content=None, embeds=None):
     if embeds:
         payload["embeds"] = embeds
 
-    response = requests.post(WEBHOOK, json=payload)
-
-    if response.status_code not in [200, 204]:
-        print("Discord error:", response.text)
+    requests.post(WEBHOOK, json=payload)
 
 
 def send_feed_item(feed_name, title, link):
@@ -69,9 +65,7 @@ def send_feed_item(feed_name, title, link):
             "url": link,
             "description": f"Novo item em {feed_name}",
             "color": 3447003,
-            "footer": {
-                "text": "Steam RSS Bot"
-            },
+            "footer": {"text": "Steam RSS Bot"},
             "timestamp": datetime.utcnow().isoformat()
         }
     ]
@@ -104,19 +98,13 @@ def send_heartbeat():
 
 
 def should_run_full_check():
-    data = load_json(FULL_CHECK_FILE, {
-        "last_check": 0
-    })
+    data = load_json(FULL_CHECK_FILE, {"last_check": 0})
 
-    last_check = data.get("last_check", 0)
-
-    return time.time() - last_check > FULL_CHECK_INTERVAL
+    return time.time() - data.get("last_check", 0) > FULL_CHECK_INTERVAL
 
 
 def save_full_check():
-    save_json(FULL_CHECK_FILE, {
-        "last_check": time.time()
-    })
+    save_json(FULL_CHECK_FILE, {"last_check": time.time()})
 
 
 def check_feed(feed_name, url, seen):
@@ -135,15 +123,9 @@ def check_feed(feed_name, url, seen):
         if uid in seen[feed_name]:
             continue
 
-        title = entry.title
-        link = entry.link
-
-        print(f"New item: {title}")
-
-        send_feed_item(feed_name, title, link)
+        send_feed_item(feed_name, entry.title, entry.link)
 
         seen[feed_name].append(uid)
-
         seen[feed_name] = seen[feed_name][-100:]
 
         found_new = True
@@ -158,16 +140,12 @@ def main():
 
     found_anything = False
 
-    full_check = should_run_full_check()
-
-    if full_check:
+    if should_run_full_check():
         print("Running 4h full revision...")
         save_full_check()
 
     for feed_name, url in FEEDS.items():
-        result = check_feed(feed_name, url, seen)
-
-        if result:
+        if check_feed(feed_name, url, seen):
             found_anything = True
 
     save_seen(seen)
